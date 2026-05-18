@@ -24,6 +24,7 @@ DISCORD_GUILD_ID = os.getenv("DISCORD_GUILD_ID")
 CHECK_INTERVAL_HOURS = int(os.getenv("CHECK_INTERVAL_HOURS", "1"))
 DEFAULT_CAPACITY = int(os.getenv("DEFAULT_CAPACITY", "100"))
 HIT_THRESHOLD = int(os.getenv("HIT_THRESHOLD", "1000000"))
+SYNC_COMMANDS = os.getenv("SYNC_COMMANDS", "false").lower() == "true"
 
 FIXED_KEYWORD = "challenge"
 BERLIN_TZ = ZoneInfo("Europe/Berlin")
@@ -32,6 +33,7 @@ TIKTOK_RE = re.compile(
     r"https?://(?:www\.)?tiktok\.com/@[^/\s]+/video/\d+|https?://(?:vm|vt)\.tiktok\.com/[^\s)]+",
     re.IGNORECASE,
 )
+
 VIDEO_ID_RE = re.compile(r"/video/(\d+)")
 
 
@@ -41,10 +43,6 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger("tiktok-1m-tracker")
-
-
-def now_utc() -> datetime:
-    return datetime.now(timezone.utc)
 
 
 def truncate_text(value: str | None, limit: int = 80) -> str:
@@ -85,8 +83,6 @@ def extract_video_id(video_url: str) -> str:
     if match:
         return match.group(1)
 
-    # Short TikTok links do not expose the real video ID without resolving.
-    # We still store a stable ID from the URL. yt-dlp can resolve it during stat checks.
     return video_url.rstrip("/").split("/")[-1].split("?")[0]
 
 
@@ -96,8 +92,6 @@ def parse_bloom_datetime(value: str | None) -> datetime | None:
 
     value = value.strip()
 
-    # Bloom format from your current bot:
-    # 2026-05-18 19:37:58 UTC
     for fmt in ("%Y-%m-%d %H:%M:%S UTC", "%Y-%m-%d %H:%M:%S"):
         try:
             dt = datetime.strptime(value, fmt)
@@ -178,14 +172,17 @@ class TikTokTrackerBot(discord.Client):
         await self.create_tables()
         self.register_commands()
 
-        if DISCORD_GUILD_ID:
-            guild = discord.Object(id=int(DISCORD_GUILD_ID))
-            self.tree.copy_global_to(guild=guild)
-            await self.tree.sync(guild=guild)
-            logger.info("Slash commands synced to guild %s", DISCORD_GUILD_ID)
+        if SYNC_COMMANDS:
+            if DISCORD_GUILD_ID:
+                guild = discord.Object(id=int(DISCORD_GUILD_ID))
+                self.tree.copy_global_to(guild=guild)
+                await self.tree.sync(guild=guild)
+                logger.info("Slash commands synced to guild %s", DISCORD_GUILD_ID)
+            else:
+                await self.tree.sync()
+                logger.info("Slash commands synced globally")
         else:
-            await self.tree.sync()
-            logger.info("Slash commands synced globally")
+            logger.info("Slash command sync skipped. Set SYNC_COMMANDS=true to sync.")
 
         self.hourly_view_checker.start()
         self.daily_reporter.start()
@@ -652,7 +649,8 @@ class TikTokTrackerBot(discord.Client):
                     f"**Daily report channel:** `{settings['daily_report_channel_id']}`\n"
                     f"**Bloom bot ID:** `{settings['bloom_bot_id']}`\n"
                     f"**Capacity:** `{settings['capacity']}`\n"
-                    f"**Active videos:** `{active_count}`"
+                    f"**Active videos:** `{active_count}`\n"
+                    f"**Sync commands:** `{SYNC_COMMANDS}`"
                 ),
                 ephemeral=True,
             )
